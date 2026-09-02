@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Syncs songs/ folder from this repo to Firebase Realtime Database.
+// Handles add, delete, AND rename by comparing file SHAs.
 
 const FIREBASE_DB_URL = process.env.FIREBASE_DB_URL;
 const GITHUB_REPO = process.env.GITHUB_REPO;
@@ -27,68 +28,115 @@ function hash(s) {
   return h;
 }
 
-async function listMp3s() {
+function getCover(name) {
+  return COVERS[Math.abs(hash(name)) % COVERS.length];
+}
+
+// Map SHA -> Firebase id (tracks that came from the same file content)
+const firebaseIdBySha = new Map();
+
+async function getGitHubFiles() {
   const res = await fetch(
     `https://api.github.com/repos/${GITHUB_REPO}/contents/songs?ref=main`,
     { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'sync-action' } }
   );
-  if (!res.ok) {
-    if (res.status === 404) return [];
-    throw new Error(`GitHub list failed: ${res.status}`);
-  }
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`GitHub list failed: ${res.status}`);
   const data = await res.json();
   return data
     .filter((f) => f.type === 'file' && f.name.toLowerCase().endsWith('.mp3'))
-    .map((f) => f.name);
+    .map((f) => ({ name: f.name, sha: f.sha }));
 }
 
-async function getCurrentFirebase() {
+async function getFirebaseSongs() {
   const res = await fetch(`${FIREBASE_DB_URL}/songs.json`);
   if (!res.ok) throw new Error(`Firebase read failed: ${res.status}`);
   const data = await res.json();
   return data || {};
 }
 
-function buildTrack(id, name) {
+function buildTrack(id, name, sha, addedAt) {
   return {
     id: String(id),
     title: prettyTitle(name),
     artist: 'Unknown Artist',
     url: `https://raw.githubusercontent.com/${GITHUB_REPO}/main/songs/${encodeURIComponent(name)}`,
-    cover: COVERS[Math.abs(hash(name)) % COVERS.length],
-    addedAt: Date.now(),
+    cover: getCover(name),
+    sha,
+    addedAt: addedAt || Date.now(),
   };
 }
 
 async function main() {
-  console.log('Listing songs on GitHub...');
-  const githubFiles = await listMp3s();
-  console.log(`Found ${githubFiles.length} files`);
+  const githubFiles = await getGitHubFiles();
+  console.log(`GitHub: ${githubFiles.length} files`);
+  githubFiles.forEach((f) => console.log(`  - ${f.name} (sha: ${f.sha})`));
 
-  console.log('Reading current Firebase state...');
-  const fb = await getCurrentFirebase();
-
-  const fbByUrl = {};
-  for (const id of Object.keys(fb)) {
-    if (fb[id]?.url) fbByUrl[fb[id].url] = id;
+  const fb = await getFirebaseSongs();
+  const fbUrls = {};
+  const fbIds = {};
+  const fbShas = {};
+  for (const [id, song] of Object.entries(fb)) {
+    if (!song || !song.url) continue;
+    fbUrls[id] = song;
+    fbIds[song.url] = id;
+    if (song.sha) firebaseIdBySha.set(song.sha, id);
   }
 
-  const targetUrl = (name) =>
-    `https://raw.githubusercontent.com/${GITHUB_REPO}/main/songs/${encodeURIComponent(name)}`;
-
   const newSongs = {};
-  githubFiles.forEach((name, idx) => {
-    const url = targetUrl(name);
-    const existingId = fbByUrl[url];
-    const id = existingId || String(idx + 1);
-    newSongs[id] = buildTrack(id, name);
-  });
+  const desiredUrls = new Set(githubFiles.map((f) =>
+    `https://raw.githubusercontent.com/${GITHUB_REPO}/main/songs/${encodeURIComponent(f.name)}`
+  ));
 
-  const desiredUrls = new Set(githubFiles.map(targetUrl));
-  for (const id of Object.keys(fb)) {
-    if (fb[id]?.url && !desiredUrls.has(fb[id].url)) {
-      newSongs[id] = null;
+  // Assign Firebase IDs to each github file
+  const assigned = new Set(); // Firebase IDs that have been assigned
+  const githubBySha = new Map(githubFiles.map((f) => [f.sha, f]));
+  const githubByName = new Map(githubFiles.map((f) => [f.name, f]));
+
+  for (const [id, song] of Object.entries(fb)) {
+    if (!song || !song.url) continue;
+    const gh = githubByName.get(song.url.split('/songs/')[1]?.split('/')[0] ? '' : '');
+    const isDesired = desiredUrls.has(song.url);
+
+    if (isDesired) {
+      // Still in GitHub — keep with same ID
+      const { sha: _sha, ...rest } = song;
+      newSongs[id] = rest;
+      assigned.add(id);
+    } else {
+      // Deleted from GitHub — check if renamed (same SHA, new name)
+      if (song.sha && githubBySha.has(song.sha)) {
+        // It's renamed — reuse same ID with new name
+        const newGh = githubBySha.get(song.sha);
+        newSongs[id] = buildTrack(id, newGh.name, newGh.sha, song.addedAt);
+        assigned.add(id);
+        console.log(`  Renamed: "${song.title}" -> "${newGh.name}" (keeping id ${id})`);
+      } else {
+        // Truly deleted
+        newSongs[id] = null;
+        console.log(`  Deleted: "${song.title}"`);
+      }
     }
+  }
+
+  // Add new files (not yet in Firebase)
+  for (const gh of githubFiles) {
+    const url = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/songs/${encodeURIComponent(gh.name)}`;
+    if (fbIds[url]) continue; // already handled above
+
+    // Try to reuse ID by SHA
+    let id = firebaseIdBySha.get(gh.sha);
+    if (!id || assigned.has(id)) {
+      // Find next free ID
+      const usedIds = new Set(Object.keys(newSongs).filter((k) => newSongs[k] !== null));
+      let next = 1;
+      while (usedIds.has(String(next))) next++;
+      id = String(next);
+    }
+
+    newSongs[id] = buildTrack(id, gh.name, gh.sha);
+    assigned.add(id);
+    console.log(`  Added: "${prettyTitle(gh.name)}" (id ${id})`);
   }
 
   console.log('Writing to Firebase...');
@@ -103,7 +151,7 @@ async function main() {
   }
   const kept = Object.values(newSongs).filter((s) => s !== null).length;
   const deleted = Object.values(newSongs).filter((s) => s === null).length;
-  console.log(`Done. ${kept} kept, ${deleted} deleted.`);
+  console.log(`Done. ${kept} songs in Firebase, ${deleted} removed.`);
 }
 
 main().catch((err) => {
