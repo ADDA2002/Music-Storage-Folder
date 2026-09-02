@@ -1,0 +1,23 @@
+name: Sync Songs to Firebase
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "songs/**"
+  delete:
+    branches:
+      - main
+    paths:
+      - "songs/**"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync songs to Firebase
+        run: node .github/sync-songs.js
+        env:
+          GITHUB_REPO: ADDA2002/Music-Storage-Folder
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
