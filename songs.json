@@ -40,5 +40,11 @@
     "artist": "Monochrome Beats",
     "url": "https://raw.githubusercontent.com/ADDA2002/Music-Storage-Folder/main/songs/06-cozy-rain.mp3",
     "cover": "https://images.unsplash.com/photo-1501386761578-eac5c94b800a?auto=format&fit=crop&w=300&q=80"
+  },
+  {
+    "id": "7",
+    "title": "Test Song2",
+    "artist": "Unknown Artist",
+    "url": "https://raw.githubusercontent.com/ADDA2002/Music-Storage-Folder/main/songs/test_song2.mp3"
   }
 ]
