@@ -52,5 +52,13 @@
     "title": "Musik",
     "artist": "Unknown Artist",
     "url": "https://raw.githubusercontent.com/ADDA2002/Music-Storage-Folder/main/songs/musik.mp3"
+  },
+  {
+    "id": "9",
+    "title": "Newtest",
+    "artist": "Unknown Artist",
+    "url": "https://raw.githubusercontent.com/ADDA2002/Music-Storage-Folder/main/songs/newtest.mp3",
+    "cover": "https://images.unsplash.com/photo-1501386761578-eac5c94b800a?auto=format&fit=crop&w=300&q=80",
+    "addedAt": 1788384410755
   }
 ]
