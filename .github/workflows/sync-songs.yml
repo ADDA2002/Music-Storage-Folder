@@ -16,6 +16,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
       - name: Sync songs to Firebase
         run: node .github/sync-songs.js
         env:
